@@ -412,13 +412,14 @@ where
 pub(crate) async fn connect_simple<T: RedisRuntime>(
     connection_info: &ConnectionInfo,
     _socket_addr: Option<SocketAddr>,
-) -> RedisResult<(T, Option<IpAddr>)> {
+) -> RedisResult<(T, Option<IpAddr>, Option<String>)> {
     Ok(match connection_info.addr {
         ConnectionAddr::Tcp(ref host, port) => {
             if let Some(socket_addr) = _socket_addr {
                 return Ok::<_, RedisError>((
                     <T>::connect_tcp(socket_addr).await?,
                     Some(socket_addr.ip()),
+                    None,
                 ));
             }
             let socket_addrs = get_socket_addrs(host, port).await?;
@@ -428,6 +429,7 @@ pub(crate) async fn connect_simple<T: RedisRuntime>(
                     Ok::<_, RedisError>((
                         <T>::connect_tcp(socket_addr).await?,
                         Some(socket_addr.ip()),
+                        None,
                     ))
                 })
             }))
@@ -446,6 +448,7 @@ pub(crate) async fn connect_simple<T: RedisRuntime>(
                 return Ok::<_, RedisError>((
                     <T>::connect_tcp_tls(host, socket_addr, insecure, tls_params).await?,
                     Some(socket_addr.ip()),
+                    None,
                 ));
             }
             let socket_addrs = get_socket_addrs(host, port).await?;
@@ -459,6 +462,7 @@ pub(crate) async fn connect_simple<T: RedisRuntime>(
                     Ok::<_, RedisError>((
                         <T>::connect_tcp_tls(host, socket_addr, insecure, tls_params).await?,
                         Some(socket_addr.ip()),
+                        None,
                     ))
                 })
             }))
@@ -477,7 +481,7 @@ pub(crate) async fn connect_simple<T: RedisRuntime>(
         #[cfg(unix)]
         ConnectionAddr::Unix(ref path) => {
             log_conn_creation("UDS", path, None);
-            (<T>::connect_unix(path).await?, None)
+            (<T>::connect_unix(path).await?, None, None)
         }
 
         #[cfg(not(unix))]

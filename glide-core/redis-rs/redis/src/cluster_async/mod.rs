@@ -26,7 +26,7 @@ mod connections_container;
 mod connections_logic;
 /// Exposed only for testing.
 pub mod testing {
-    pub use super::connections_container::ConnectionWithIp;
+    pub use super::connections_container::ConnectionDetails;
     pub use super::connections_logic::*;
 }
 use crate::{
@@ -2026,7 +2026,9 @@ where
                 )
             }
             InternalSingleNodeRouting::SpecificNode(route) => {
-                match read_guard.connection_for_route(&route) {
+                match read_guard
+                    .connection_for_route_with_params(&route, Some(core.cluster_params.clone()))
+                {
                     Some((conn, address)) => ConnectionCheck::Found((conn, address)),
                     None => {
                         // No connection is found for the given route:
@@ -2548,7 +2550,7 @@ pub trait Connect: Sized {
         connection_timeout: Duration,
         socket_addr: Option<SocketAddr>,
         glide_connection_options: GlideConnectionOptions,
-    ) -> RedisFuture<'a, (Self, Option<IpAddr>)>
+    ) -> RedisFuture<'a, (Self, Option<IpAddr>, Option<String>)>
     where
         T: IntoConnectionInfo + Send + 'a;
 }
@@ -2560,7 +2562,7 @@ impl Connect for MultiplexedConnection {
         connection_timeout: Duration,
         socket_addr: Option<SocketAddr>,
         glide_connection_options: GlideConnectionOptions,
-    ) -> RedisFuture<'a, (MultiplexedConnection, Option<IpAddr>)>
+    ) -> RedisFuture<'a, (MultiplexedConnection, Option<IpAddr>, Option<String>)>
     where
         T: IntoConnectionInfo + Send + 'a,
     {
