@@ -14,7 +14,6 @@ use crate::{
 };
 use std::net::SocketAddr;
 
-use future::ok;
 use futures::prelude::*;
 use futures_util::{future::BoxFuture, join};
 use tracing::warn;
@@ -374,22 +373,8 @@ where
     match info_res {
         Ok(value) => {
             let info_dict: Result<InfoDict, RedisError> = FromRedisValue::from_redis_value(&value);
-            if let Ok(info_dict) = info_dict {
-                if let Some(az) = info_dict.get::<String>("availability_zone") {
-                    conn_details.az = Some(az);
-                    Ok(())
-                } else {
-                    Err(RedisError::from((
-                        ErrorKind::ResponseError,
-                        "Failed to get availability_zone from info",
-                    )))
-                }
-            } else {
-                Err(RedisError::from((
-                    ErrorKind::ResponseError,
-                    "Failed to parse info command",
-                )))
-            }
+            conn_details.az = info_dict?.get::<String>("availability_zone");
+            Ok(())
         }
         Err(_) => {
             // Handle the error case for the INFO command
