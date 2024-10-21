@@ -353,6 +353,28 @@ where
     Ok(())
 }
 
+// Helper function to extract and update availability zone from INFO command
+async fn update_az_from_info<C>(conn_details: &mut ConnectionDetails<C>) -> RedisResult<()>
+where
+    C: ConnectionLike + Send + 'static,
+{
+    let info_res = conn_details.conn.req_packed_command(&cmd("INFO")).await;
+    match info_res {
+        Ok(value) => {
+            let info_dict: Result<InfoDict, RedisError> = FromRedisValue::from_redis_value(&value);
+            conn_details.az = info_dict?.get::<String>("availability_zone");
+            Ok(())
+        }
+        Err(_) => {
+            // Handle the error case for the INFO command
+            Err(RedisError::from((
+                ErrorKind::ResponseError,
+                "Failed to execute INFO command",
+            )))
+        }
+    }
+}
+
 #[doc(hidden)]
 pub const MANAGEMENT_CONN_NAME: &str = "glide_management_connection";
 
