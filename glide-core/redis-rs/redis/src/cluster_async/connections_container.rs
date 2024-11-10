@@ -25,47 +25,55 @@ macro_rules! count_connections {
 
 /// A struct that encapsulates a network connection along with its associated IP address.
 #[derive(Clone, Eq, PartialEq, Debug)]
-pub struct ConnectionWithIp<Connection> {
+pub struct ConnectionDetails<Connection> {
     /// The actual connection
     pub conn: Connection,
     /// The IP associated with the connection
     pub ip: Option<IpAddr>,
+    /// The AZ associated with the connection
+    pub az: Option<String>,
 }
 
-impl<Connection> ConnectionWithIp<Connection>
+impl<Connection> ConnectionDetails<Connection>
 where
     Connection: Clone + Send + 'static,
 {
-    /// Consumes the current instance and returns a new `ConnectionWithIp`
+    /// Consumes the current instance and returns a new `ConnectionDetails`
     /// where the connection is wrapped in a future.
     #[doc(hidden)]
-    pub fn into_future(self) -> ConnectionWithIp<ConnectionFuture<Connection>> {
-        ConnectionWithIp {
+    pub fn into_future(self) -> ConnectionDetails<ConnectionFuture<Connection>> {
+        ConnectionDetails {
             conn: async { self.conn }.boxed().shared(),
             ip: self.ip,
+            az: self.az,
         }
     }
 }
 
-impl<Connection> From<(Connection, Option<IpAddr>)> for ConnectionWithIp<Connection> {
-    fn from(val: (Connection, Option<IpAddr>)) -> Self {
-        ConnectionWithIp {
+impl<Connection> From<(Connection, Option<IpAddr>, Option<String>)>
+    for ConnectionDetails<Connection>
+{
+    fn from(val: (Connection, Option<IpAddr>, Option<String>)) -> Self {
+        ConnectionDetails {
             conn: val.0,
             ip: val.1,
+            az: val.2,
         }
     }
 }
 
-impl<Connection> From<ConnectionWithIp<Connection>> for (Connection, Option<IpAddr>) {
-    fn from(val: ConnectionWithIp<Connection>) -> Self {
-        (val.conn, val.ip)
+impl<Connection> From<ConnectionDetails<Connection>>
+    for (Connection, Option<IpAddr>, Option<String>)
+{
+    fn from(val: ConnectionDetails<Connection>) -> Self {
+        (val.conn, val.ip, val.az)
     }
 }
 
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct ClusterNode<Connection> {
-    pub user_connection: ConnectionWithIp<Connection>,
-    pub management_connection: Option<ConnectionWithIp<Connection>>,
+    pub user_connection: ConnectionDetails<Connection>,
+    pub management_connection: Option<ConnectionDetails<Connection>>,
 }
 
 impl<Connection> ClusterNode<Connection>
@@ -73,8 +81,8 @@ where
     Connection: Clone,
 {
     pub fn new(
-        user_connection: ConnectionWithIp<Connection>,
-        management_connection: Option<ConnectionWithIp<Connection>>,
+        user_connection: ConnectionDetails<Connection>,
+        management_connection: Option<ConnectionDetails<Connection>>,
     ) -> Self {
         Self {
             user_connection,
@@ -280,6 +288,7 @@ where
         }
 
         match route.slot_addr() {
+            // Master strategy will be in use when the command is not read_only
             SlotAddr::Master => self.connection_for_address(addrs.primary.as_str()),
             // ReplicaOptional strategy will be in use when the command is read_only
             SlotAddr::ReplicaOptional => match &self.read_from_replica_strategy {
@@ -347,6 +356,16 @@ where
         self.connection_map.get(address).map(|item| {
             let (address, conn) = (item.key(), item.value());
             (address.clone(), conn.user_connection.conn.clone())
+        })
+    }
+
+    pub(crate) fn connection_details_for_address(
+        &self,
+        address: &str,
+    ) -> Option<ConnectionAndAddress<ConnectionDetails<Connection>>> {
+        self.connection_map.get(address).map(|item| {
+            let (address, conn) = (item.key(), item.value());
+            (address.clone(), conn.user_connection.clone())
         })
     }
 
@@ -426,8 +445,9 @@ mod tests {
     {
         pub(crate) fn new_only_with_user_conn(user_connection: Connection) -> Self {
             let ip = None;
+            let az = None;
             Self {
-                user_connection: (user_connection, ip).into(),
+                user_connection: (user_connection, ip, az).into(),
                 management_connection: None,
             }
         }
@@ -462,12 +482,13 @@ mod tests {
     fn create_cluster_node(
         connection: usize,
         use_management_connections: bool,
+        node_az: Option<String>,
     ) -> ClusterNode<usize> {
         let ip = None;
         ClusterNode::new(
-            (connection, ip).into(),
+            (connection, ip, node_az.clone()).into(),
             if use_management_connections {
-                Some((connection * 10, ip).into())
+                Some((connection * 10, ip, node_az).into())
             } else {
                 None
             },
@@ -563,27 +584,27 @@ mod tests {
         let connection_map = DashMap::new();
         connection_map.insert(
             "primary1".into(),
-            create_cluster_node(1, use_management_connections),
+            create_cluster_node(1, use_management_connections, None),
         );
         connection_map.insert(
             "primary2".into(),
-            create_cluster_node(2, use_management_connections),
+            create_cluster_node(2, use_management_connections, None),
         );
         connection_map.insert(
             "primary3".into(),
-            create_cluster_node(3, use_management_connections),
+            create_cluster_node(3, use_management_connections, None),
         );
         connection_map.insert(
             "replica2-1".into(),
-            create_cluster_node(21, use_management_connections),
+            create_cluster_node(21, use_management_connections, None),
         );
         connection_map.insert(
             "replica3-1".into(),
-            create_cluster_node(31, use_management_connections),
+            create_cluster_node(31, use_management_connections, None),
         );
         connection_map.insert(
             "replica3-2".into(),
-            create_cluster_node(32, use_management_connections),
+            create_cluster_node(32, use_management_connections, None),
         );
 
         ConnectionsContainer {
@@ -1133,7 +1154,7 @@ mod tests {
         assert!(container.connection_for_address(&new_node).is_none());
         // Create new connection map
         let new_connection_map = DashMap::new();
-        new_connection_map.insert(new_node.clone(), create_cluster_node(1, false));
+        new_connection_map.insert(new_node.clone(), create_cluster_node(1, false, None));
 
         // Extend the current connection map
         container.extend_connection_map(ConnectionsMap(new_connection_map));

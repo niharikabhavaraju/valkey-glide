@@ -1,7 +1,10 @@
 use super::{
-    connections_container::{ClusterNode, ConnectionWithIp},
+    connections_container::{ClusterNode, ConnectionDetails},
     Connect,
 };
+use crate::cmd;
+use crate::FromRedisValue;
+use crate::InfoDict;
 use crate::{
     aio::{ConnectionLike, DisconnectNotifier},
     client::GlideConnectionOptions,
@@ -33,7 +36,7 @@ pub enum RefreshConnectionType {
 
 fn failed_management_connection<C>(
     addr: &str,
-    user_conn: ConnectionWithIp<ConnectionFuture<C>>,
+    user_conn: ConnectionDetails<ConnectionFuture<C>>,
     err: RedisError,
 ) -> ConnectAndCheckResult<C>
 where
@@ -90,8 +93,8 @@ where
 }
 
 fn create_async_node<C>(
-    user_conn: ConnectionWithIp<C>,
-    management_conn: Option<ConnectionWithIp<C>>,
+    user_conn: ConnectionDetails<C>,
+    management_conn: Option<ConnectionDetails<C>>,
 ) -> AsyncClusterNode<C>
 where
     C: ConnectionLike + Connect + Send + Sync + 'static + Clone,
@@ -133,9 +136,9 @@ where
     {
         (Ok(conn_1), Ok(conn_2)) => {
             // Both connections were successfully established
-            let mut user_conn: ConnectionWithIp<C> = conn_1;
-            let mut management_conn: ConnectionWithIp<C> = conn_2;
-            if let Err(err) = setup_user_connection(&mut user_conn.conn, params).await {
+            let mut user_conn: ConnectionDetails<C> = conn_1;
+            let mut management_conn: ConnectionDetails<C> = conn_2;
+            if let Err(err) = setup_user_connection(&mut user_conn, params).await {
                 return err.into();
             }
             match setup_management_connection(&mut management_conn.conn).await {
@@ -148,7 +151,7 @@ where
         }
         (Ok(mut connection), Err(err)) | (Err(err), Ok(mut connection)) => {
             // Only a single connection was successfully established. Use it for the user connection
-            match setup_user_connection(&mut connection.conn, params).await {
+            match setup_user_connection(&mut connection, params).await {
                 Ok(_) => failed_management_connection(addr, connection.into_future(), err),
                 Err(err) => err.into(),
             }
@@ -322,11 +325,11 @@ async fn create_and_setup_user_connection<C>(
     params: ClusterParams,
     socket_addr: Option<SocketAddr>,
     glide_connection_options: GlideConnectionOptions,
-) -> RedisResult<ConnectionWithIp<C>>
+) -> RedisResult<ConnectionDetails<C>>
 where
     C: ConnectionLike + Connect + Send + 'static,
 {
-    let mut connection: ConnectionWithIp<C> = create_connection(
+    let mut connection: ConnectionDetails<C> = create_connection(
         node,
         params.clone(),
         socket_addr,
@@ -334,22 +337,30 @@ where
         glide_connection_options,
     )
     .await?;
-    setup_user_connection(&mut connection.conn, params).await?;
+    setup_user_connection(&mut connection, params).await?;
     Ok(connection)
 }
 
-async fn setup_user_connection<C>(conn: &mut C, params: ClusterParams) -> RedisResult<()>
+async fn setup_user_connection<C>(
+    conn_details: &mut ConnectionDetails<C>,
+    params: ClusterParams,
+) -> RedisResult<()>
 where
     C: ConnectionLike + Connect + Send + 'static,
 {
+    // let mut conn = &conn_details.conn;
     let read_from_replicas = params.read_from_replicas
         != crate::cluster_slotmap::ReadFromReplicaStrategy::AlwaysFromPrimary;
     let connection_timeout = params.connection_timeout;
-    check_connection(conn, connection_timeout).await?;
+    check_connection(&mut conn_details.conn, connection_timeout).await?;
     if read_from_replicas {
         // If READONLY is sent to primary nodes, it will have no effect
-        crate::cmd("READONLY").query_async(conn).await?;
+        crate::cmd("READONLY")
+            .query_async(&mut conn_details.conn)
+            .await?;
     }
+
+    update_az_from_info(conn_details).await?;
     Ok(())
 }
 
@@ -395,7 +406,7 @@ async fn create_connection<C>(
     socket_addr: Option<SocketAddr>,
     is_management: bool,
     mut glide_connection_options: GlideConnectionOptions,
-) -> RedisResult<ConnectionWithIp<C>>
+) -> RedisResult<ConnectionDetails<C>>
 where
     C: ConnectionLike + Connect + Send + 'static,
 {
