@@ -220,6 +220,10 @@ jobs:
             matrix:
                 build: ${{ fromJson(needs.load-platform-matrix.outputs.PLATFORM_MATRIX) }}
         steps:
+            - name: Setup self-hosted runner access
+              if: ${{ matrix.build.TARGET == 'aarch64-unknown-linux-gnu' }}
+              run: sudo chown -R $USER:$USER /home/ubuntu/actions-runner/_work/valkey-glide
+            
             - name: checkout
               uses: actions/checkout@v4
 
@@ -228,10 +232,31 @@ jobs:
               with:
                   python-version: 3.12
 
-            - name: Install engine
-              uses: ./.github/workflows/install-engine
-              with:
-                  version: "8.0"
+            - name: Install engine Ubuntu ARM
+              if: ${{ matrix.build.TARGET == 'aarch64-unknown-linux-gnu' }}
+              shell: bash
+              # in self hosted runner we first want to check that engine is not already installed
+              run: |
+                  if [[ $(`which redis-server`) == '' ]]
+                  then
+                    sudo apt-get update
+                    sudo apt-get install -y redis-server
+                  else
+                    echo "Redis is already installed"
+                  fi
+
+            - name: Install engine Ubuntu x86
+              if: ${{ matrix.build.TARGET == 'x86_64-unknown-linux-gnu' }}
+              shell: bash
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y redis-server
+
+            - name: Install engine MacOS
+              if: ${{ matrix.build.OS == 'macos' }}
+              shell: bash
+              run: |
+                  brew install redis
 
             - name: Check if RC and set a distribution tag for the package
               shell: bash
@@ -239,12 +264,11 @@ jobs:
                   if [[ "${GITHUB_REF:11}" == *"rc"* ]]
                   then
                     echo "This is a release candidate"
-                    export pip_pre="--pre"
+                    echo "PIP_PRE=true" >> $GITHUB_ENV
                   else
                     echo "This is a stable release"
-                    export pip_pre=""
+                    echo "PIP_PRE=false" >> $GITHUB_ENV
                   fi
-                  echo "PIP_PRE=${pip_pre}" >> $GITHUB_ENV
 
             - name: Run the tests
               shell: bash
@@ -253,7 +277,11 @@ jobs:
                   python -m venv venv
                   source venv/bin/activate
                   pip install -U pip
-                  pip install ${PIP_PRE} valkey-glide
+                  if [[ "${{ env.PIP_PRE }}" == "true" ]]; then
+                    pip install --pre valkey-glide
+                  else
+                    pip install valkey-glide
+                  fi
                   python rc_test.py
 
             # Reset the repository to make sure we get the clean checkout of the action later in other actions.
