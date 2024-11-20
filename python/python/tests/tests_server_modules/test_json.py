@@ -7,8 +7,12 @@ import typing
 
 import pytest
 from glide.async_commands.core import ConditionalChange, InfoSection
-from glide.async_commands.server_modules import json
-from glide.async_commands.server_modules.json import JsonArrIndexOptions, JsonGetOptions
+from glide.async_commands.server_modules import glide_json as json
+from glide.async_commands.server_modules.glide_json import (
+    JsonArrIndexOptions,
+    JsonArrPopOptions,
+    JsonGetOptions,
+)
 from glide.config import ProtocolVersion
 from glide.constants import OK
 from glide.exceptions import RequestError
@@ -156,6 +160,149 @@ class TestJson:
         )
 
         expected_result = b'[\n~{\n~~"a":*1.0,\n~~"b":*2,\n~~"c":*{\n~~~"d":*3,\n~~~"e":*4\n~~}\n~}\n]'
+        assert result == expected_result
+
+    @pytest.mark.parametrize("cluster_mode", [True, False])
+    @pytest.mark.parametrize("protocol", [ProtocolVersion.RESP2, ProtocolVersion.RESP3])
+    async def test_json_mget(self, glide_client: TGlideClient):
+        key1 = get_random_string(5)
+        key2 = get_random_string(5)
+
+        json1_value = {"a": 1.0, "b": {"a": 1, "b": 2.5, "c": True}}
+        json2_value = {"a": 3.0, "b": {"a": 1, "b": 4}}
+
+        assert (
+            await json.set(glide_client, key1, "$", OuterJson.dumps(json1_value)) == OK
+        )
+        assert (
+            await json.set(glide_client, key2, "$", OuterJson.dumps(json2_value)) == OK
+        )
+
+        # Test with root JSONPath
+        result = await json.mget(
+            glide_client,
+            [key1, key2],
+            "$",
+        )
+        expected_result = [
+            b'[{"a":1.0,"b":{"a":1,"b":2.5,"c":true}}]',
+            b'[{"a":3.0,"b":{"a":1,"b":4}}]',
+        ]
+        assert result == expected_result
+
+        # Retrieves the full JSON objects from multiple keys.
+        result = await json.mget(
+            glide_client,
+            [key1, key2],
+            ".",
+        )
+        expected_result = [
+            b'{"a":1.0,"b":{"a":1,"b":2.5,"c":true}}',
+            b'{"a":3.0,"b":{"a":1,"b":4}}',
+        ]
+        assert result == expected_result
+
+        result = await json.mget(
+            glide_client,
+            [key1, key2],
+            "$.a",
+        )
+        expected_result = [b"[1.0]", b"[3.0]"]
+        assert result == expected_result
+
+        # Retrieves the value of the 'b' field for multiple keys.
+        result = await json.mget(
+            glide_client,
+            [key1, key2],
+            "$.b",
+        )
+        expected_result = [b'[{"a":1,"b":2.5,"c":true}]', b'[{"a":1,"b":4}]']
+        assert result == expected_result
+
+        # Retrieves all values of 'b' fields using recursive path for multiple keys
+        result = await json.mget(
+            glide_client,
+            [key1, key2],
+            "$..b",
+        )
+        expected_result = [b'[{"a":1,"b":2.5,"c":true},2.5]', b'[{"a":1,"b":4},4]']
+        assert result == expected_result
+
+        # retrieves the value of the nested 'b.b' field for multiple keys
+        result = await json.mget(
+            glide_client,
+            [key1, key2],
+            ".b.b",
+        )
+        expected_result = [b"2.5", b"4"]
+        assert result == expected_result
+
+        # JSONPath that exists in only one of the keys
+        result = await json.mget(
+            glide_client,
+            [key1, key2],
+            "$.b.c",
+        )
+        expected_result = [b"[true]", b"[]"]
+        assert result == expected_result
+
+        # Legacy path that exists in only one of the keys
+        result = await json.mget(
+            glide_client,
+            [key1, key2],
+            ".b.c",
+        )
+        expected_result = [b"true", None]
+        assert result == expected_result
+
+        # JSONPath doesn't exist
+        result = await json.mget(
+            glide_client,
+            [key1, key2],
+            "$non_existing_path",
+        )
+        expected_result = [b"[]", b"[]"]
+        assert result == expected_result
+
+        # Legacy path doesn't exist
+        result = await json.mget(
+            glide_client,
+            [key1, key2],
+            ".non_existing_path",
+        )
+        assert result == [None, None]
+
+        # JSONPath one key doesn't exist
+        result = await json.mget(
+            glide_client,
+            [key1, "{non_existing_key}"],
+            "$.a",
+        )
+        assert result == [b"[1.0]", None]
+
+        # Legacy path one key doesn't exist
+        result = await json.mget(
+            glide_client,
+            [key1, "{non_existing_key}"],
+            ".a",
+        )
+        assert result == [b"1.0", None]
+
+        # Both keys don't exist
+        result = await json.mget(
+            glide_client,
+            ["{non_existing_key}1", "{non_existing_key}2"],
+            "$a",
+        )
+        assert result == [None, None]
+
+        # Test with only one key
+        result = await json.mget(
+            glide_client,
+            [key1],
+            "$.a",
+        )
+        expected_result = [b"[1.0]"]
         assert result == expected_result
 
     @pytest.mark.parametrize("cluster_mode", [True, False])
@@ -585,6 +732,10 @@ class TestJson:
         result = await json.numincrby(glide_client, key, "$.key1", -0.5)
         assert result == b"[-0.5]"  # Expect 0 - 0.5 = -0.5
 
+        # Check 'null' value
+        result = await json.numincrby(glide_client, key, "$.key7", 5)
+        assert result == b"[null]"  # Expect 'null'
+
         # Test Legacy Path
         # Increment float value (key1) by 5 (integer)
         result = await json.numincrby(glide_client, key, "key1", 5)
@@ -631,6 +782,10 @@ class TestJson:
         # Check for Overflow in legacy
         with pytest.raises(RequestError):
             await json.numincrby(glide_client, key, ".key9", 1.7976931348623157e308)
+
+        # Check 'null' value
+        with pytest.raises(RequestError):
+            await json.numincrby(glide_client, key, ".key7", 5)
 
     @pytest.mark.parametrize("cluster_mode", [True, False])
     @pytest.mark.parametrize("protocol", [ProtocolVersion.RESP2, ProtocolVersion.RESP3])
@@ -757,6 +912,10 @@ class TestJson:
         # Check if the rest of the key1 path matches were updated and not only the last value
         result = await json.get(glide_client, key, "$..key1")  # type: ignore
         assert result == b"[-16500,[140,175],1380]"
+
+        # Check 'null' in legacy
+        with pytest.raises(RequestError):
+            await json.nummultby(glide_client, key, ".key7", 5)
 
         # Check for non-existent path in legacy
         with pytest.raises(RequestError):
@@ -1696,8 +1855,8 @@ class TestJson:
         initial_json_value = '{"a": 1, "b": ["one", "two"]}'
         assert await json.set(glide_client, key, "$", initial_json_value) == OK
 
-        assert await json.arrappend(glide_client, key, ['"three"'], "$.b") == [3]
-        assert await json.arrappend(glide_client, key, ['"four"', '"five"'], ".b") == 5
+        assert await json.arrappend(glide_client, key, "$.b", ['"three"']) == [3]
+        assert await json.arrappend(glide_client, key, ".b", ['"four"', '"five"']) == 5
 
         result = await json.get(glide_client, key, "$")
         assert isinstance(result, bytes)
@@ -1705,27 +1864,27 @@ class TestJson:
             {"a": 1, "b": ["one", "two", "three", "four", "five"]}
         ]
 
-        assert await json.arrappend(glide_client, key, ['"value"'], "$.a") == [None]
+        assert await json.arrappend(glide_client, key, "$.a", ['"value"']) == [None]
 
         # JSONPath, path doesnt exist
-        assert await json.arrappend(glide_client, key, ['"value"'], "$.c") == []
+        assert await json.arrappend(glide_client, key, "$.c", ['"value"']) == []
         # Legacy path, `path` doesnt exist
         with pytest.raises(RequestError):
-            await json.arrappend(glide_client, key, ['"value"'], ".c")
+            await json.arrappend(glide_client, key, ".c", ['"value"'])
 
         # Legacy path, the JSON value at `path` is not a array
         with pytest.raises(RequestError):
-            await json.arrappend(glide_client, key, ['"value"'], ".a")
+            await json.arrappend(glide_client, key, ".a", ['"value"'])
 
         with pytest.raises(RequestError):
-            await json.arrappend(glide_client, "non_existing_key", ['"six"'], "$.b")
+            await json.arrappend(glide_client, "non_existing_key", "$.b", ['"six"'])
         with pytest.raises(RequestError):
-            await json.arrappend(glide_client, "non_existing_key", ['"six"'], ".b")
+            await json.arrappend(glide_client, "non_existing_key", ".b", ['"six"'])
 
         # multiple path match
         json_value = '[[], ["a"], ["a", "b"]]'
         assert await json.set(glide_client, key, "$", json_value) == OK
-        assert await json.arrappend(glide_client, key, ['"c"'], "[*]") == 1
+        assert await json.arrappend(glide_client, key, "[*]", ['"c"']) == 1
         result = await json.get(glide_client, key, "$")
         assert isinstance(result, bytes)
         assert OuterJson.loads(result) == [[["c"], ["a", "c"], ["a", "b", "c"]]]
@@ -1840,3 +1999,101 @@ class TestJson:
         assert await json.resp(glide_client, "nonexistent_key", "$") is None
         assert await json.resp(glide_client, "nonexistent_key", ".") is None
         assert await json.resp(glide_client, "nonexistent_key") is None
+
+    @pytest.mark.parametrize("cluster_mode", [True, False])
+    @pytest.mark.parametrize("protocol", [ProtocolVersion.RESP2, ProtocolVersion.RESP3])
+    async def test_json_arrpop(self, glide_client: TGlideClient):
+        key = get_random_string(5)
+        key2 = get_random_string(5)
+
+        json_value = '{"a": [1, 2, true], "b": {"a": [3, 4, ["value", 3, false] ,5], "c": {"a": 42}}}'
+        assert await json.set(glide_client, key, "$", json_value) == OK
+
+        assert await json.arrpop(
+            glide_client, key, JsonArrPopOptions(path="$.a", index=1)
+        ) == [b"2"]
+        assert (
+            await json.arrpop(glide_client, key, JsonArrPopOptions(path="$..a"))
+        ) == [b"true", b"5", None]
+
+        assert (
+            await json.arrpop(glide_client, key, JsonArrPopOptions(path="..a")) == b"1"
+        )
+        # Even if only one array element was returned, ensure second array at `..a` was popped
+        assert await json.get(glide_client, key, "$..a") == b"[[],[3,4],42]"
+
+        # Out of index
+        assert await json.arrpop(
+            glide_client, key, JsonArrPopOptions(path="$..a", index=10)
+        ) == [None, b"4", None]
+
+        assert (
+            await json.arrpop(
+                glide_client, key, JsonArrPopOptions(path="..a", index=-10)
+            )
+            == b"3"
+        )
+
+        # Path is not an array
+        assert await json.arrpop(glide_client, key, JsonArrPopOptions(path="$")) == [
+            None
+        ]
+        with pytest.raises(RequestError):
+            assert await json.arrpop(glide_client, key, JsonArrPopOptions(path="."))
+        with pytest.raises(RequestError):
+            assert await json.arrpop(glide_client, key)
+
+        # Non existing path
+        assert (
+            await json.arrpop(
+                glide_client, key, JsonArrPopOptions(path="$.non_existing_path")
+            )
+            == []
+        )
+        with pytest.raises(RequestError):
+            assert await json.arrpop(
+                glide_client, key, JsonArrPopOptions(path="non_existing_path")
+            )
+
+        # Non existing key
+        with pytest.raises(RequestError):
+            await json.arrpop(
+                glide_client, "non_existing_key", JsonArrPopOptions(path="$.a")
+            )
+        with pytest.raises(RequestError):
+            await json.arrpop(
+                glide_client, "non_existing_key", JsonArrPopOptions(path=".a")
+            )
+
+        assert (
+            await json.set(glide_client, key2, "$", '[[], ["a"], ["a", "b", "c"]]')
+            == OK
+        )
+        assert (
+            await json.arrpop(glide_client, key2, JsonArrPopOptions(path=".", index=-1))
+            == b'["a","b","c"]'
+        )
+        assert await json.arrpop(glide_client, key2) == b'["a"]'
+
+        # pop from an empty array
+        assert await json.arrpop(glide_client, key2, JsonArrPopOptions("$[0]")) == [
+            None
+        ]
+        assert await json.arrpop(glide_client, key2, JsonArrPopOptions("$[0]", 10)) == [
+            None
+        ]
+        assert await json.arrpop(glide_client, key2, JsonArrPopOptions("[0]")) == None
+        assert (
+            await json.arrpop(glide_client, key2, JsonArrPopOptions("[0]", 10)) == None
+        )
+
+        # non jsonpath pops from all matching paths, even if one result is being returned
+        assert (
+            await json.set(
+                glide_client, key2, "$", '[[], ["a"], ["a", "b"], ["a", "b", "c"]]'
+            )
+            == OK
+        )
+
+        assert await json.arrpop(glide_client, key2, JsonArrPopOptions("[*]")) == b'"a"'
+        assert await json.get(glide_client, key2, ".") == b'[[],[],["a"],["a","b"]]'

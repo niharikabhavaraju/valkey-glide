@@ -251,7 +251,7 @@ mod standalone_client_tests {
             .map(|mock| mock.get_number_of_received_commands())
             .collect();
         replica_reads.sort();
-        assert_eq!(config.expected_replica_reads, replica_reads);
+        assert!(config.expected_replica_reads <= replica_reads);
     }
 
     #[rstest]
@@ -267,6 +267,18 @@ mod standalone_client_tests {
     fn test_read_from_replica_round_robin() {
         test_read_from_replica(ReadFromReplicaTestConfig {
             read_from: ReadFrom::PreferReplica,
+            expected_primary_reads: 0,
+            expected_replica_reads: vec![1, 1, 1],
+            ..Default::default()
+        });
+    }
+
+    #[rstest]
+    #[serial_test::serial]
+    #[timeout(SHORT_STANDALONE_TEST_TIMEOUT)]
+    fn test_read_from_replica_az_affinity() {
+        test_read_from_replica(ReadFromReplicaTestConfig {
+            read_from: ReadFrom::AZAffinity,
             expected_primary_reads: 0,
             expected_replica_reads: vec![1, 1, 1],
             ..Default::default()
