@@ -2,7 +2,6 @@
 package glide;
 
 import static glide.TestConfiguration.SERVER_VERSION;
-import static glide.TestUtilities.azClusterClientConfig;
 import static glide.TestUtilities.commonClientConfig;
 import static glide.TestUtilities.commonClusterClientConfig;
 import static glide.api.BaseClient.OK;
@@ -44,7 +43,7 @@ public class ConnectionTests {
     @SneakyThrows
     public GlideClusterClient createAzTestClient(String az) {
         return GlideClusterClient.createClient(
-                        azClusterClientConfig()
+                        commonClusterClientConfig()
                                 .readFrom(ReadFrom.AZ_AFFINITY)
                                 .clientAZ(az)
                                 .requestTimeout(2000)
@@ -65,7 +64,8 @@ public class ConnectionTests {
 
         // Create client for setting the configs
         GlideClusterClient configSetClient =
-                GlideClusterClient.createClient(azClusterClientConfig().requestTimeout(2000).build()).get();
+                GlideClusterClient.createClient(commonClusterClientConfig().requestTimeout(2000).build())
+                        .get();
         assertEquals(configSetClient.configResetStat().get(), OK);
 
         // Get Replica Count for current cluster
@@ -133,7 +133,8 @@ public class ConnectionTests {
         String getCmdstat = String.format("cmdstat_get:calls=%d", nGetCalls);
 
         GlideClusterClient configSetClient =
-                GlideClusterClient.createClient(azClusterClientConfig().requestTimeout(2000).build()).get();
+                GlideClusterClient.createClient(commonClusterClientConfig().requestTimeout(2000).build())
+                        .get();
 
         // reset availability zone for all nodes
         configSetClient.configSet(Map.of("availability-zone", ""), ALL_NODES).get();

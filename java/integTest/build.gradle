@@ -33,7 +33,6 @@ dependencies {
 
 def standaloneHosts = ''
 def clusterHosts = ''
-def azClusterHosts = ''
 
 ext {
     extractAddressesFromClusterManagerOutput = { String output ->
@@ -72,7 +71,7 @@ tasks.register('startCluster') {
             new ByteArrayOutputStream().withStream { os ->
                 exec {
                     workingDir "${project.rootDir}/../utils"
-                    def args = ['python3', 'cluster_manager.py', 'start', '--cluster-mode']
+                    def args = ['python3', 'cluster_manager.py', 'start', '--cluster-mode', '-r', '4']
                     if (System.getProperty("tls") == 'true') args.add(2, '--tls')
                     commandLine args
                     standardOutput = os
@@ -81,25 +80,6 @@ tasks.register('startCluster') {
             }
         } else {
             clusterHosts = System.getProperty("cluster-endpoints")
-        }
-    }
-}
-
-tasks.register('startClusterForAz') {
-    doLast {
-        if (System.getProperty("cluster-endpoints") == null) {
-            new ByteArrayOutputStream().withStream { os ->
-                exec {
-                    workingDir "${project.rootDir}/../utils"
-                    def args = ['python3', 'cluster_manager.py', 'start', '--cluster-mode', '-r', '4']
-                    if (System.getProperty("tls") == 'true') args.add(2, '--tls')
-                    commandLine args
-                    standardOutput = os
-                }
-                azClusterHosts = extractAddressesFromClusterManagerOutput(os.toString())
-            }
-        } else {
-            azClusterHosts = System.getProperty("cluster-endpoints")
         }
     }
 }
@@ -127,7 +107,6 @@ test.dependsOn 'stopAllBeforeTests'
 stopAllBeforeTests.finalizedBy 'clearDirs'
 clearDirs.finalizedBy 'startStandalone'
 clearDirs.finalizedBy 'startCluster'
-clearDirs.finalizedBy 'startClusterForAz'
 test.finalizedBy 'stopAllAfterTests'
 test.dependsOn ':client:buildRustRelease'
 
@@ -135,7 +114,6 @@ tasks.withType(Test) {
     doFirst {
         systemProperty 'test.server.standalone', standaloneHosts
         systemProperty 'test.server.cluster', clusterHosts
-        systemProperty 'test.server.azcluster', azClusterHosts
         systemProperty 'test.server.tls', System.getProperty("tls")
     }
 
